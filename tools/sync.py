@@ -188,7 +188,8 @@ def organization(skills, agents):
             out.append(f'    {nid("a", a)} -.->|読む| {nid("s" if r in work else "t", r)}')
     out += ["```", "", "## 窓口", ""]
     out += [f"- `{t}`: {', '.join(desk[t])}" for t in desk] or ["(まだない)"]
-    out += ["", "## エージェント", "", "| エージェント | 役割 | 読むスキル | 道具 |", "|---|---|---|---|"]
+    if agents:
+        out += ["", "## エージェント", "", "| エージェント | 役割 | 読むスキル | 道具 |", "|---|---|---|---|"]
     for a, (front, _, tools, refs) in agents.items():
         out.append(f"| `{a}` | {first_sentence(front)} | {', '.join(refs)} | {', '.join(tools) or 'すべて'} |")
     out += ["", "## スキル", "", "| スキル | 何をするか | 参照のファイル | 読むエージェント |", "|---|---|---|---|"]
