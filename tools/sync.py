@@ -3,8 +3,8 @@
     python tools/sync.py          検査して生成する
     python tools/sync.py --check  検査と、生成結果が最新かどうかだけを調べる (書き換えない)
 
-元にするのは `.github/skills/*/SKILL.md` と `.github/agents/*.agent.md`。
-生成するのは `.claude/skills/`、`.claude/agents/`、`docs/organization.md`。
+元にするのは `.github/skills/<名前>/` (SKILL.md と references/ などのフォルダごと) と
+`.github/agents/*.agent.md`。生成するのは `.claude/skills/`、`.claude/agents/`、`docs/organization.md`。
 Python 3.9 以上。追加のライブラリは要らない。
 """
 import pathlib
@@ -12,7 +12,8 @@ import re
 import sys
 
 # 小さく保つための上限。自分の組織に合わせて変えてよい
-SKILL_MAX_LINES = 60   # スキル 1 個の行数
+SKILL_MAX_LINES = 60   # スキル 1 個の行数 (SKILL.md)
+REF_MAX_LINES = 200    # references などの .md 1 個の行数
 AGENT_MAX_LINES = 25   # エージェント 1 個の行数
 AGENT_MAX_SKILLS = 3   # エージェントが読むスキルの数
 
@@ -38,6 +39,7 @@ PLACEHOLDER = re.compile(r"〔[^〕\n]*〕")  # 型の記入欄の埋め残し (
 NAME_MAX = 64  # Copilot のスキル名の上限 (これを超えると読み込まれない)
 DESC_MAX = 1024  # Copilot のスキルの説明の上限
 SKILL_REF = re.compile(r"\.github/skills/([^/\s`]+)/SKILL\.md")
+LOCAL_REF = re.compile(r"`((?:references|scripts|assets)/[^`\s]*)`")  # SKILL.md から指すフォルダの中のファイル
 
 
 def split(text):
@@ -50,7 +52,7 @@ def field(front, key):
     return m.group(1).strip() if m else ""
 
 
-def load(errors):
+def load(errors, warnings):
     skills, agents = {}, {}
     for path in sorted(SRC_SKILLS.glob("*/SKILL.md")):
         where = path.relative_to(ROOT).as_posix()
@@ -72,7 +74,11 @@ def load(errors):
             errors.append(f"{where}: {SKILL_MAX_LINES} 行を超えている。2 個のスキルに分ける")
         if PLACEHOLDER.search(text):
             errors.append(f"{where}: 型の埋め残しがある: {PLACEHOLDER.search(text).group(0)}")
-        skills[name] = (front, body)
+        files = sorted(f.relative_to(path.parent).as_posix() for f in path.parent.rglob("*")
+                       if f.is_file() and f != path and "__pycache__" not in f.parts)
+        links = list(dict.fromkeys(LOCAL_REF.findall(body)))
+        check_files(path.parent, files, links, errors, warnings)
+        skills[name] = (front, body, files)
     for path in sorted(SRC_AGENTS.glob("*.agent.md")):
         where = path.relative_to(ROOT).as_posix()
         text = path.read_text(encoding="utf-8")
@@ -107,10 +113,27 @@ def load(errors):
     return skills, agents
 
 
+def check_files(folder, files, links, errors, warnings):
+    """スキルのフォルダの中のファイル (references など) を検査する。"""
+    where = folder.relative_to(ROOT).as_posix()
+    for link in links:
+        if not (folder / link.rstrip("/")).exists():
+            errors.append(f"{where}/SKILL.md: 参照している '{link}' がない")
+    for f in files:
+        if f.endswith(".md"):
+            text = (folder / f).read_text(encoding="utf-8")
+            if PLACEHOLDER.search(text):
+                errors.append(f"{where}/{f}: 型の埋め残しがある: {PLACEHOLDER.search(text).group(0)}")
+            if len(text.splitlines()) > REF_MAX_LINES:
+                errors.append(f"{where}/{f}: {REF_MAX_LINES} 行を超えている。ファイルを分ける")
+        if not any(f == l or (l.endswith("/") and f.startswith(l)) for l in links):
+            warnings.append(f"{where}/{f}: SKILL.md から参照されていない (読まれない)")
+
+
 def desks(skills, agents):
     """本文にエージェント名をバッククォートで書いているスキルを窓口とみなす。"""
     out = {}
-    for name, (_, body) in skills.items():
+    for name, (_, body, _) in skills.items():
         if name in BUILDERS:
             continue
         members = [a for a in agents if f"`{a}`" in body]
@@ -168,10 +191,11 @@ def organization(skills, agents):
     out += ["", "## エージェント", "", "| エージェント | 役割 | 読むスキル | 道具 |", "|---|---|---|---|"]
     for a, (front, _, tools, refs) in agents.items():
         out.append(f"| `{a}` | {first_sentence(front)} | {', '.join(refs)} | {', '.join(tools) or 'すべて'} |")
-    out += ["", "## スキル", "", "| スキル | 何をするか | 読むエージェント |", "|---|---|---|"]
+    out += ["", "## スキル", "", "| スキル | 何をするか | 参照のファイル | 読むエージェント |", "|---|---|---|---|"]
     for s in work:
         readers = [a for a, (_, _, _, refs) in agents.items() if s in refs]
-        out.append(f"| `{s}` | {first_sentence(skills[s][0])} | {', '.join(readers) or '(直接呼ぶだけ)'} |")
+        front, _, files = skills[s]
+        out.append(f"| `{s}` | {first_sentence(front)} | {len(files)} | {', '.join(readers) or '(直接呼ぶだけ)'} |")
     unused = [s for s in work if s not in used]
     if agents and unused:
         out += ["", "## どこからも読まれていないスキル", "", "直接 `/<名前>` で使っていないなら、消すか統合を考える。", ""]
@@ -181,41 +205,61 @@ def organization(skills, agents):
 
 def outputs(skills, agents):
     out = {}
-    for name, (front, body) in skills.items():
+    for name, (front, body, files) in skills.items():
         out[DST_SKILLS / name / "SKILL.md"] = claude_skill(front, body)
+        for f in files:
+            out[DST_SKILLS / name / f] = (SRC_SKILLS / name / f).read_bytes()
     for name, (front, body, tools, _) in agents.items():
         out[DST_AGENTS / f"{name}.md"] = claude_agent(front, body, tools)
     out[ORG] = organization(skills, agents)
     return out
 
 
-def generated(paths):
+def generated():
     """以前にこの道具が生成したファイルだけを返す (手で置いたものは消さない)。"""
-    return [p for p in paths if p.is_file() and NOTE in p.read_text(encoding="utf-8")]
+    made = lambda p: p.is_file() and NOTE in p.read_text(encoding="utf-8")
+    out = [p for p in DST_AGENTS.glob("*.md") if made(p)]
+    for skill in DST_SKILLS.glob("*/SKILL.md"):
+        if made(skill):  # 生成したスキルのフォルダは、中のファイルもすべて生成したもの
+            out += [f for f in skill.parent.rglob("*") if f.is_file()]
+    return out
+
+
+def same(path, content):
+    if not path.exists():
+        return False
+    return path.read_bytes() == (content if isinstance(content, bytes) else content.encode("utf-8"))
 
 
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
     check = "--check" in sys.argv
-    errors = []
-    skills, agents = load(errors)
+    errors, warnings = [], []
+    skills, agents = load(errors, warnings)
+    for w in warnings:
+        print("注意: " + w)
     if errors:
         print("直すところがある:")
         for e in errors:
             print("  - " + e)
         sys.exit(1)
     out = outputs(skills, agents)
-    existing = generated(list(DST_AGENTS.glob("*.md")) + list(DST_SKILLS.glob("*/SKILL.md")))
-    stale = [p for p in existing if p not in out]
-    changed = [p for p, text in out.items() if not p.exists() or p.read_text(encoding="utf-8") != text]
+    stale = [p for p in generated() if p not in out]
+    changed = [p for p, content in out.items() if not same(p, content)]
     if not check:
         for p in changed:
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(out[p], encoding="utf-8", newline="\n")
+            content = out[p]
+            if isinstance(content, bytes):
+                p.write_bytes(content)
+            else:
+                p.write_text(content, encoding="utf-8", newline="\n")
         for p in stale:
             p.unlink()
-            if not any(p.parent.iterdir()):
-                p.parent.rmdir()
+            d = p.parent
+            while d not in (DST_SKILLS, DST_AGENTS) and d.exists() and not any(d.iterdir()):
+                d.rmdir()
+                d = d.parent
     for p in changed + stale:
         verb = ("古い" if check else "更新") if p in changed else ("古い" if check else "削除")
         print(f"{verb}: {p.relative_to(ROOT).as_posix()}")

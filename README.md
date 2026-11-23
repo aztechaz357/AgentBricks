@@ -6,7 +6,7 @@
 
 | 部品 | 何か | 置き場所 | 作り方 |
 |---|---|---|---|
-| スキル | 1 つの作業の手順。60 行まで | `.github/skills/<名前>/SKILL.md` | `/new-skill <作業の説明>` |
+| スキル | 1 つの作業。手順 (SKILL.md、60 行まで) と、出力の型や観点や知識 (references/) | `.github/skills/<名前>/` | `/new-skill <作業の説明>` |
 | エージェント | 役割。スキルを 1〜3 個読む | `.github/agents/<名前>.agent.md` | `/new-agent <役割の説明>` |
 | 窓口 | 担当のエージェントに仕事を割り振るスキル | `.github/skills/<名前>/SKILL.md` | `/new-desk <受け付ける仕事>` |
 
@@ -16,12 +16,33 @@
 
 型は `templates/` にある。手で写して埋めてもよい。
 
+## スキルの中身
+
+```
+.github/skills/write-weekly-report/
+  SKILL.md              手順だけ (60 行まで)。下の references を「要るときに読む」と指す
+  references/
+    format.md           出力の型 (見出しの並び、書き方の決まり)
+    checklist.md        確かめる観点 (レビュー、バグ探しで使う)
+    notes.md            知っておくこと (用語、見る場所、使うコマンド)
+    examples/           入力と出力の例
+```
+
+references は作業の形に合わせて要るものだけを置く。
+
+| 作業の形 | 例 | 主な references |
+|---|---|---|
+| 作る | いつもの報告書、外部仕様書 | format、examples |
+| 調べる | バグ探し、メモリ配置の調べ方 | notes、checklist、format |
+| 確かめる | 資料のレビュー | checklist、format、examples |
+
 ## 始め方
 
-1. このフォルダを自分の作業用にコピーする (または GitHub のテンプレートリポジトリにする)。
-2. チャットで `/new-skill <いつもやっている作業の説明>`。スキルが 1 個できる。
-3. 実際の仕事で `/<名前>` と呼んで使い、手順を直す。
-4. 慣れたら次の部品を 1 個足す。どこで何を足すかは [積み上げの段階](docs/levels.md)。
+1. このリポジトリを GitHub の「Use this template」で自分用に作る (またはフォルダをコピーする)。
+2. スキルにしたい作業の材料を `inbox/<名前>/` に置く。`input/` に入力の例、`output/` に出力の例、`memo.md` にいつもの進め方。レビューなら、レビュー前を `input/`、レビュー後を `output/` に置く。材料は Git に入らない。
+3. チャットで `/new-skill <名前> <作業の説明>`。材料から手順と references を作る。材料がなくても、質問に答えれば作れる。
+4. 実際の仕事で `/<名前>` と呼んで使い、手順と references を直す。
+5. 慣れたら次の部品を 1 個足す。どこで何を足すかは [積み上げの段階](docs/levels.md)。
 
 ## 決まり
 
@@ -38,6 +59,7 @@
 |---|---|---|---|
 | スキルの場所 | `.claude/skills/<名前>/SKILL.md` | `.github/skills/<名前>/SKILL.md` | `.github/` に書き、`.claude/` へ写す |
 | スキルの中身 | 同じ形式 (`name` と `description`) | 同じ。`name` はフォルダ名と同じ、英小文字・数字・ハイフンで 64 文字まで、`description` は 1024 文字まで | 両方の条件を `sync.py` が検査する |
+| スキルの補助ファイル | SKILL.md から指したファイルを、要るときに読む | スキルのフォルダに置いたファイルを使える | `references/` に置き、フォルダごと `.claude/` へ写す |
 | エージェントの場所 | `.claude/agents/<名前>.md` | `.github/agents/<名前>.agent.md` | `.github/` に書き、`.claude/` へ変換する |
 | エージェントの `tools` | 道具の名前 (`Read, Grep, Glob` など) | 別名 (`read`、`search`、`edit`、`execute`、`web`、`agent`) | 別名で書き、`sync.py` が Claude の名前に直す |
 | エージェントに読ませるスキル | `skills` 欄でも指定できる | `skills` 欄でも指定できる | 欄は使わず、本文に `.github/skills/<名前>/SKILL.md` と書いて読ませる (両方で同じに動くため) |
@@ -46,8 +68,9 @@
 
 ## tools/sync.py がすること
 
-- 部品を検査する: 名前とファイル名の一致、説明の有無、型の埋め残し、行数の上限、エージェントが読むスキルが実在するか。上限はファイルの先頭で変えられる。
-- Claude Code 用に `.claude/skills/` と `.claude/agents/` を生成する (Copilot は `.github/` をそのまま読む)。
+- 部品を検査する: 名前とファイル名の一致、説明の有無、型の埋め残し、行数の上限、エージェントが読むスキルが実在するか、SKILL.md が指す references が実在するか。上限はファイルの先頭で変えられる。
+- SKILL.md から指されていない references は「注意」として出す (置いても読まれないため)。
+- Claude Code 用に `.claude/skills/` (フォルダごと) と `.claude/agents/` を生成する (Copilot は `.github/` をそのまま読む)。
 - 組織図 `docs/organization.md` を生成する。どこからも読まれていないスキルも一覧する。
 - `python tools/sync.py --check` は書き換えずに調べるだけ (CI 用)。
 
