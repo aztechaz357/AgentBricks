@@ -23,16 +23,20 @@ DST_SKILLS = ROOT / ".claude" / "skills"
 DST_AGENTS = ROOT / ".claude" / "agents"
 ORG = ROOT / "docs" / "organization.md"
 
-BUILDERS = {"new-skill", "new-agent", "new-team"}  # 部品を作るためのスキル。組織図には出さない
+BUILDERS = {"new-skill", "new-agent", "new-desk"}  # 部品を作るためのスキル。組織図には出さない
 TOOLS = {  # Copilot の道具の名前 -> Claude Code の道具の名前
     "read": ["Read"],
     "search": ["Grep", "Glob"],
     "edit": ["Edit", "Write"],
     "execute": ["Bash"],
+    "web": ["WebSearch", "WebFetch"],
+    "agent": ["Agent"],
 }
 NOTE = "<!-- tools/sync.py が生成。直接編集せず .github/ 側を直す -->\n"
 NAME = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
-PLACEHOLDER = re.compile(r"<[^<>\n]*[^\x00-\x7f][^<>\n]*>")  # 型の埋め残し (<名前> など)
+PLACEHOLDER = re.compile(r"〔[^〕\n]*〕")  # 型の記入欄の埋め残し (〔名前〕 など)
+NAME_MAX = 64  # Copilot のスキル名の上限 (これを超えると読み込まれない)
+DESC_MAX = 1024  # Copilot のスキルの説明の上限
 SKILL_REF = re.compile(r"\.github/skills/([^/\s`]+)/SKILL\.md")
 
 
@@ -58,13 +62,15 @@ def load(errors):
             continue
         if field(front, "name") != name:
             errors.append(f"{where}: name がフォルダ名 '{name}' と違う")
-        if not NAME.match(name):
-            errors.append(f"{where}: 名前は英小文字、数字、ハイフンにする")
+        if not NAME.match(name) or len(name) > NAME_MAX:
+            errors.append(f"{where}: 名前は英小文字、数字、ハイフンで {NAME_MAX} 文字までにする")
         if not field(front, "description"):
             errors.append(f"{where}: description が空")
+        if len(field(front, "description")) > DESC_MAX:
+            errors.append(f"{where}: description が {DESC_MAX} 文字を超えている")
         if len(text.splitlines()) > SKILL_MAX_LINES:
             errors.append(f"{where}: {SKILL_MAX_LINES} 行を超えている。2 個のスキルに分ける")
-        if name not in BUILDERS and PLACEHOLDER.search(text):
+        if PLACEHOLDER.search(text):
             errors.append(f"{where}: 型の埋め残しがある: {PLACEHOLDER.search(text).group(0)}")
         skills[name] = (front, body)
     for path in sorted(SRC_AGENTS.glob("*.agent.md")):
@@ -101,7 +107,7 @@ def load(errors):
     return skills, agents
 
 
-def teams(skills, agents):
+def desks(skills, agents):
     """本文にエージェント名をバッククォートで書いているスキルを窓口とみなす。"""
     out = {}
     for name, (_, body) in skills.items():
@@ -129,8 +135,8 @@ def first_sentence(front):
 
 
 def organization(skills, agents):
-    team = teams(skills, agents)
-    work = [s for s in skills if s not in BUILDERS and s not in team]
+    desk = desks(skills, agents)
+    work = [s for s in skills if s not in BUILDERS and s not in desk]
     used = {r for (_, _, _, refs) in agents.values() for r in refs}
     nid = lambda kind, n: kind + "_" + n.replace("-", "_")
     out = [
@@ -138,27 +144,27 @@ def organization(skills, agents):
         "",
         NOTE.strip(),
         "",
-        f"窓口 {len(team)} 個、エージェント {len(agents)} 個、スキル {len(work)} 個 (部品を作るスキルは除く)。",
+        f"窓口 {len(desk)} 個、エージェント {len(agents)} 個、スキル {len(work)} 個 (部品を作るスキルは除く)。",
         "",
     ]
     if not agents and not work:
         out += ["まだ部品はない。`/new-skill` でスキルを 1 個作るところから始める。", ""]
         return "\n".join(out)
     out += ["```mermaid", "flowchart LR"]
-    for t in team:
+    for t in desk:
         out.append(f'    {nid("t", t)}(["{t}"])')
     for a in agents:
         out.append(f'    {nid("a", a)}["{a}"]')
     for s in work:
         out.append(f'    {nid("s", s)}[/"{s}"/]')
-    for t, members in team.items():
+    for t, members in desk.items():
         for a in members:
             out.append(f'    {nid("t", t)} --> {nid("a", a)}')
     for a, (_, _, _, refs) in agents.items():
         for r in refs:
             out.append(f'    {nid("a", a)} -.->|読む| {nid("s" if r in work else "t", r)}')
     out += ["```", "", "## 窓口", ""]
-    out += [f"- `{t}`: {', '.join(team[t])}" for t in team] or ["(まだない)"]
+    out += [f"- `{t}`: {', '.join(desk[t])}" for t in desk] or ["(まだない)"]
     out += ["", "## エージェント", "", "| エージェント | 役割 | 読むスキル | 道具 |", "|---|---|---|---|"]
     for a, (front, _, tools, refs) in agents.items():
         out.append(f"| `{a}` | {first_sentence(front)} | {', '.join(refs)} | {', '.join(tools) or 'すべて'} |")
