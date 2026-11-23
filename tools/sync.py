@@ -1,0 +1,223 @@
+"""部品 (`.github/` のスキルとエージェント) を検査し、Claude Code 用のファイルと組織図を生成する。
+
+    python tools/sync.py          検査して生成する
+    python tools/sync.py --check  検査と、生成結果が最新かどうかだけを調べる (書き換えない)
+
+元にするのは `.github/skills/*/SKILL.md` と `.github/agents/*.agent.md`。
+生成するのは `.claude/skills/`、`.claude/agents/`、`docs/organization.md`。
+Python 3.9 以上。追加のライブラリは要らない。
+"""
+import pathlib
+import re
+import sys
+
+# 小さく保つための上限。自分の組織に合わせて変えてよい
+SKILL_MAX_LINES = 60   # スキル 1 個の行数
+AGENT_MAX_LINES = 25   # エージェント 1 個の行数
+AGENT_MAX_SKILLS = 3   # エージェントが読むスキルの数
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+SRC_SKILLS = ROOT / ".github" / "skills"
+SRC_AGENTS = ROOT / ".github" / "agents"
+DST_SKILLS = ROOT / ".claude" / "skills"
+DST_AGENTS = ROOT / ".claude" / "agents"
+ORG = ROOT / "docs" / "organization.md"
+
+BUILDERS = {"new-skill", "new-agent", "new-team"}  # 部品を作るためのスキル。組織図には出さない
+TOOLS = {  # Copilot の道具の名前 -> Claude Code の道具の名前
+    "read": ["Read"],
+    "search": ["Grep", "Glob"],
+    "edit": ["Edit", "Write"],
+    "execute": ["Bash"],
+}
+NOTE = "<!-- tools/sync.py が生成。直接編集せず .github/ 側を直す -->\n"
+NAME = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+PLACEHOLDER = re.compile(r"<[^<>\n]*[^\x00-\x7f][^<>\n]*>")  # 型の埋め残し (<名前> など)
+SKILL_REF = re.compile(r"\.github/skills/([^/\s`]+)/SKILL\.md")
+
+
+def split(text):
+    m = re.match(r"---\n(.*?)\n---\n(.*)", text, re.S)
+    return (m.group(1), m.group(2)) if m else (None, text)
+
+
+def field(front, key):
+    m = re.search(rf"^{key}:\s*(.*)$", front, re.M)
+    return m.group(1).strip() if m else ""
+
+
+def load(errors):
+    skills, agents = {}, {}
+    for path in sorted(SRC_SKILLS.glob("*/SKILL.md")):
+        where = path.relative_to(ROOT).as_posix()
+        text = path.read_text(encoding="utf-8")
+        front, body = split(text)
+        name = path.parent.name
+        if front is None:
+            errors.append(f"{where}: 先頭の --- で囲んだ部分 (frontmatter) がない")
+            continue
+        if field(front, "name") != name:
+            errors.append(f"{where}: name がフォルダ名 '{name}' と違う")
+        if not NAME.match(name):
+            errors.append(f"{where}: 名前は英小文字、数字、ハイフンにする")
+        if not field(front, "description"):
+            errors.append(f"{where}: description が空")
+        if len(text.splitlines()) > SKILL_MAX_LINES:
+            errors.append(f"{where}: {SKILL_MAX_LINES} 行を超えている。2 個のスキルに分ける")
+        if name not in BUILDERS and PLACEHOLDER.search(text):
+            errors.append(f"{where}: 型の埋め残しがある: {PLACEHOLDER.search(text).group(0)}")
+        skills[name] = (front, body)
+    for path in sorted(SRC_AGENTS.glob("*.agent.md")):
+        where = path.relative_to(ROOT).as_posix()
+        text = path.read_text(encoding="utf-8")
+        front, body = split(text)
+        name = path.name[: -len(".agent.md")]
+        if front is None:
+            errors.append(f"{where}: 先頭の --- で囲んだ部分 (frontmatter) がない")
+            continue
+        if field(front, "name") != name:
+            errors.append(f"{where}: name がファイル名 '{name}' と違う")
+        if not NAME.match(name):
+            errors.append(f"{where}: 名前は英小文字、数字、ハイフンにする")
+        if not field(front, "description"):
+            errors.append(f"{where}: description が空")
+        if len(text.splitlines()) > AGENT_MAX_LINES:
+            errors.append(f"{where}: {AGENT_MAX_LINES} 行を超えている。役割を分ける")
+        if PLACEHOLDER.search(text):
+            errors.append(f"{where}: 型の埋め残しがある: {PLACEHOLDER.search(text).group(0)}")
+        tools = re.findall(r'"([^"]+)"', field(front, "tools"))
+        for t in tools:
+            if t not in TOOLS:
+                errors.append(f"{where}: 道具 '{t}' は使えない。{', '.join(TOOLS)} から選ぶ")
+        refs = list(dict.fromkeys(SKILL_REF.findall(body)))
+        for r in refs:
+            if not (SRC_SKILLS / r / "SKILL.md").is_file():
+                errors.append(f"{where}: 読むスキル '{r}' がない。先に new-skill で作る")
+        if not refs:
+            errors.append(f"{where}: 読むスキルが 1 個もない")
+        if len(refs) > AGENT_MAX_SKILLS:
+            errors.append(f"{where}: 読むスキルが {AGENT_MAX_SKILLS} 個を超えている。役割を分ける")
+        agents[name] = (front, body, tools, refs)
+    return skills, agents
+
+
+def teams(skills, agents):
+    """本文にエージェント名をバッククォートで書いているスキルを窓口とみなす。"""
+    out = {}
+    for name, (_, body) in skills.items():
+        if name in BUILDERS:
+            continue
+        members = [a for a in agents if f"`{a}`" in body]
+        if members:
+            out[name] = members
+    return out
+
+
+def claude_skill(front, body):
+    return "---\n" + front + "\n---\n" + NOTE + body
+
+
+def claude_agent(front, body, tools):
+    lines = [f"name: {field(front, 'name')}", f"description: {field(front, 'description')}"]
+    if tools:
+        lines.append("tools: " + ", ".join(t for a in tools for t in TOOLS[a]))
+    return "---\n" + "\n".join(lines) + "\n---\n" + NOTE + body
+
+
+def first_sentence(front):
+    return field(front, "description").split("。")[0]
+
+
+def organization(skills, agents):
+    team = teams(skills, agents)
+    work = [s for s in skills if s not in BUILDERS and s not in team]
+    used = {r for (_, _, _, refs) in agents.values() for r in refs}
+    nid = lambda kind, n: kind + "_" + n.replace("-", "_")
+    out = [
+        "# 組織図",
+        "",
+        NOTE.strip(),
+        "",
+        f"窓口 {len(team)} 個、エージェント {len(agents)} 個、スキル {len(work)} 個 (部品を作るスキルは除く)。",
+        "",
+    ]
+    if not agents and not work:
+        out += ["まだ部品はない。`/new-skill` でスキルを 1 個作るところから始める。", ""]
+        return "\n".join(out)
+    out += ["```mermaid", "flowchart LR"]
+    for t in team:
+        out.append(f'    {nid("t", t)}(["{t}"])')
+    for a in agents:
+        out.append(f'    {nid("a", a)}["{a}"]')
+    for s in work:
+        out.append(f'    {nid("s", s)}[/"{s}"/]')
+    for t, members in team.items():
+        for a in members:
+            out.append(f'    {nid("t", t)} --> {nid("a", a)}')
+    for a, (_, _, _, refs) in agents.items():
+        for r in refs:
+            out.append(f'    {nid("a", a)} -.->|読む| {nid("s" if r in work else "t", r)}')
+    out += ["```", "", "## 窓口", ""]
+    out += [f"- `{t}`: {', '.join(team[t])}" for t in team] or ["(まだない)"]
+    out += ["", "## エージェント", "", "| エージェント | 役割 | 読むスキル | 道具 |", "|---|---|---|---|"]
+    for a, (front, _, tools, refs) in agents.items():
+        out.append(f"| `{a}` | {first_sentence(front)} | {', '.join(refs)} | {', '.join(tools) or 'すべて'} |")
+    out += ["", "## スキル", "", "| スキル | 何をするか | 読むエージェント |", "|---|---|---|"]
+    for s in work:
+        readers = [a for a, (_, _, _, refs) in agents.items() if s in refs]
+        out.append(f"| `{s}` | {first_sentence(skills[s][0])} | {', '.join(readers) or '(直接呼ぶだけ)'} |")
+    unused = [s for s in work if s not in used]
+    if agents and unused:
+        out += ["", "## どこからも読まれていないスキル", "", "直接 `/<名前>` で使っていないなら、消すか統合を考える。", ""]
+        out += [f"- `{s}`" for s in unused]
+    return "\n".join(out) + "\n"
+
+
+def outputs(skills, agents):
+    out = {}
+    for name, (front, body) in skills.items():
+        out[DST_SKILLS / name / "SKILL.md"] = claude_skill(front, body)
+    for name, (front, body, tools, _) in agents.items():
+        out[DST_AGENTS / f"{name}.md"] = claude_agent(front, body, tools)
+    out[ORG] = organization(skills, agents)
+    return out
+
+
+def generated(paths):
+    """以前にこの道具が生成したファイルだけを返す (手で置いたものは消さない)。"""
+    return [p for p in paths if p.is_file() and NOTE in p.read_text(encoding="utf-8")]
+
+
+def main():
+    sys.stdout.reconfigure(encoding="utf-8")
+    check = "--check" in sys.argv
+    errors = []
+    skills, agents = load(errors)
+    if errors:
+        print("直すところがある:")
+        for e in errors:
+            print("  - " + e)
+        sys.exit(1)
+    out = outputs(skills, agents)
+    existing = generated(list(DST_AGENTS.glob("*.md")) + list(DST_SKILLS.glob("*/SKILL.md")))
+    stale = [p for p in existing if p not in out]
+    changed = [p for p, text in out.items() if not p.exists() or p.read_text(encoding="utf-8") != text]
+    if not check:
+        for p in changed:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(out[p], encoding="utf-8", newline="\n")
+        for p in stale:
+            p.unlink()
+            if not any(p.parent.iterdir()):
+                p.parent.rmdir()
+    for p in changed + stale:
+        verb = ("古い" if check else "更新") if p in changed else ("古い" if check else "削除")
+        print(f"{verb}: {p.relative_to(ROOT).as_posix()}")
+    print(f"スキル {len(skills)} 個、エージェント {len(agents)} 個を確認した")
+    if check and (changed or stale):
+        print("python tools/sync.py を実行して生成し直す")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
