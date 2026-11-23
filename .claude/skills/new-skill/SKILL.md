@@ -26,21 +26,24 @@ description: いつもしている作業を、作業の説明と入力・出力�
    答えがなくても進められるものは仮に置いて進め、最後に伝える。
 4. `.github/skills/` の既存のスキルと重ならないか見る。重なるなら、既存を直すか分けるかを利用者に聞く。
 5. 名前を決める。英小文字とハイフンで 1〜3 語 (例: `write-weekly-report`)。
-6. `templates/skill/` を `.github/skills/<名前>/` にフォルダごと写す。`patterns.md` の表は目安で、材料に合わせて要る references を残す。要らないものは消し、SKILL.md の「参照」からも消す。
-7. SKILL.md の「手順」には歩みだけを書き、SKILL.md 全体を 60 行に収める。長くなる型、観点、知識は references に移す。
-8. 例の入力 1 つで、できたスキルを試す。結果を例の出力 (確かめる作業なら、入力と出力の違い) と比べ、抜けがあれば手順か references を直す。
+6. `templates/skill/` を `.github/skills/<名前>/` にフォルダごと写す。`patterns.md` の表は目安で、材料に合わせて要る references、scripts、assets を残す。要らないものは消し、SKILL.md の「参照」の表からも消す。
+7. SKILL.md の「手順」には歩みだけを書き、SKILL.md 全体を 60 行に収める。長くなる型、観点、知識は references に、決まった計算や変換や検査は scripts に移す (`references/scripts.md`)。「参照」の表には、どの手順で読むか、実行するかを書く。
+8. 使う場面を 3 つ選んで試す: 例の入力、別の入力、うまくいかなさそうな入力 (空、大きい、形が崩れている)。結果を例の出力 (確かめる作業なら、入力と出力の違い) と比べ、抜けがあれば直す。できれば同じ頼み方をスキルなしでもして、良くなったかを見る。試した場面は、作るスキルの例のフォルダの README に 1 行ずつ残す (直したあとに同じ場面で試し直すため)。
 9. `docs/journal.md` に 1 行足す。理由は利用者の言葉で書く。なければ作業の説明から書き、推測と分かるようにする。
 10. `python tools/sync.py` を実行し、エラーがあれば直す。
 11. 利用者に伝える: 作ったファイル、呼び方 (`/<名前>`)、仮に置いたこと、消した references、試した結果、`inbox/<名前>/` は消してよいこと、次は実際の仕事で 1 回使って直すこと。
 
 ## 出力
 
-- `.github/skills/<名前>/` (SKILL.md と references/) と、生成された `.claude/skills/<名前>/`
+- `.github/skills/<名前>/` (SKILL.md と references/、scripts/、assets/) と、生成された `.claude/skills/<名前>/`
 
 ## 参照
 
-- `references/patterns.md`: 作業の 3 つの形と、それぞれの手順の骨組みと references
-- `references/from-samples.md`: 入力と出力の例から型と観点を取り出す方法
+| ファイル | いつ | 中身 |
+|---|---|---|
+| `references/patterns.md` | 手順 1、6 で読む | 作業の 3 つの形と、それぞれの手順の骨組みと置くもの |
+| `references/from-samples.md` | 手順 2 で読む | 入力と出力の例から型と観点を取り出す方法 |
+| `references/scripts.md` | 手順 7 で、スクリプトにするか迷ったら読む | スクリプトにする目安と書き方 |
 
 ## 終わりの条件
 

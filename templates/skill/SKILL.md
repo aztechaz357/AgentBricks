@@ -25,12 +25,16 @@ description: 〔何をするスキルか、いつ使うか。1〜2 文。呼び�
 
 ## 参照
 
-このスキルのフォルダの中にある。手順の中で要るときに読む。使わないものは行ごと消す。
+このスキルのフォルダの中にある。「いつ」に書いた時に読む (scripts は実行する)。使わない行はファイルごと消す。
 
-- `references/format.md`: 出力の型
-- `references/checklist.md`: 確かめる観点
-- `references/notes.md`: 知っておくこと (用語、見る場所、使うコマンド)
-- `references/examples/`: 入力と出力の例
+| ファイル | いつ | 中身 |
+|---|---|---|
+| `references/format.md` | 手順 〔n〕 で、出力を書く前に読む | 出力の型 |
+| `references/checklist.md` | 手順 〔n〕 で読む | 確かめる観点 |
+| `references/notes.md` | 手順 〔n〕 で読む | 用語、見る場所、使うコマンド |
+| `references/examples/` | 出力の形に迷ったときに読む | 入力と出力の例 |
+| `scripts/run.py` | 手順 〔n〕 で実行する (中身は読まなくてよい) | 〔何をするか〕 |
+| `assets/` | 手順 〔n〕 で写して使う | 〔出力に使う雛形〕 |
 
 ## 終わりの条件
 

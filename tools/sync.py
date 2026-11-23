@@ -14,6 +14,7 @@ import sys
 # 小さく保つための上限。自分の組織に合わせて変えてよい
 SKILL_MAX_LINES = 60   # スキル 1 個の行数 (SKILL.md)
 REF_MAX_LINES = 200    # references などの .md 1 個の行数
+TOC_LINES = 100        # これより長い資料には目次を付ける (Anthropic の書き方の指針)
 AGENT_MAX_LINES = 25   # エージェント 1 個の行数
 AGENT_MAX_SKILLS = 3   # エージェントが読むスキルの数
 
@@ -37,6 +38,8 @@ NOTE = "<!-- tools/sync.py が生成。直接編集せず .github/ 側を直す 
 NAME = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 PLACEHOLDER = re.compile(r"〔[^〕\n]*〕")  # 型の記入欄の埋め残し (〔名前〕 など)
 NAME_MAX = 64  # Copilot のスキル名の上限 (これを超えると読み込まれない)
+RESERVED = ("anthropic", "claude")  # スキル名に使わない語 (Anthropic の書き方の指針)
+LOCAL_PATH = re.compile(r"`((?:references|scripts|assets)/[^`\s]*)`")  # 資料の中から指しているパス
 DESC_MAX = 1024  # Copilot のスキルの説明の上限
 SKILL_REF = re.compile(r"\.github/skills/([^/\s`]+)/SKILL\.md")
 LOCAL_REF = re.compile(r"`((?:references|scripts|assets)/[^`\s]*)`")  # SKILL.md から指すフォルダの中のファイル
@@ -66,6 +69,8 @@ def load(errors, warnings):
             errors.append(f"{where}: name がフォルダ名 '{name}' と違う")
         if not NAME.match(name) or len(name) > NAME_MAX:
             errors.append(f"{where}: 名前は英小文字、数字、ハイフンで {NAME_MAX} 文字までにする")
+        if any(w in name for w in RESERVED):
+            errors.append(f"{where}: 名前に {'、'.join(RESERVED)} は使わない")
         if not field(front, "description"):
             errors.append(f"{where}: description が空")
         if len(field(front, "description")) > DESC_MAX:
@@ -120,12 +125,23 @@ def check_files(folder, files, links, errors, warnings):
         if not (folder / link.rstrip("/")).exists():
             errors.append(f"{where}/SKILL.md: 参照している '{link}' がない")
     for f in files:
-        if f.endswith(".md"):
+        try:
             text = (folder / f).read_text(encoding="utf-8")
-            if PLACEHOLDER.search(text):
-                errors.append(f"{where}/{f}: 型の埋め残しがある: {PLACEHOLDER.search(text).group(0)}")
-            if len(text.splitlines()) > REF_MAX_LINES:
+        except UnicodeDecodeError:
+            text = None  # 画像や Word の様式などは中身を見ない
+        if text is not None and PLACEHOLDER.search(text):
+            errors.append(f"{where}/{f}: 型の埋め残しがある: {PLACEHOLDER.search(text).group(0)}")
+        if text is not None and f.endswith(".md"):
+            lines = len(text.splitlines())
+            if lines > REF_MAX_LINES:
                 errors.append(f"{where}/{f}: {REF_MAX_LINES} 行を超えている。ファイルを分ける")
+            if lines > TOC_LINES and not re.search(r"^#+\s*目次", text, re.M):
+                warnings.append(f"{where}/{f}: {TOC_LINES} 行を超えている。先頭に「## 目次」を置く")
+            for ref in LOCAL_PATH.findall(text):
+                if ref.count("/") == 1 and ref.endswith("/"):
+                    continue  # 「references/」のようにフォルダの名前を挙げただけのもの
+                if ref != f and (folder / ref.rstrip("/")).exists():
+                    warnings.append(f"{where}/{f}: 資料から '{ref}' を指している。参照は SKILL.md から 1 段だけにする")
         if not any(f == l or (l.endswith("/") and f.startswith(l)) for l in links):
             warnings.append(f"{where}/{f}: SKILL.md から参照されていない (読まれない)")
 
