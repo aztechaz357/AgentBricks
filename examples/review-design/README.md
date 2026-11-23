@@ -6,7 +6,7 @@
 
 | フォルダ | 中身 |
 |---|---|
-| `inbox/` | new-skill に渡した材料。いつもの進め方のメモ、レビュー前の設計書 (`input/`)、指摘を受けて直した後の設計書 (`after/`) が 2 組 |
+| `inbox/` | new-skill に渡した材料。いつもの進め方のメモ、レビュー前の設計書 (`input/`)、指摘を受けて直した後の設計書 (`output/`) が 2 組 |
 | `skill/` | できたスキル。手順 (`SKILL.md`)、指摘の一覧の型 (`references/format.md`)、観点 10 個 (`references/checklist.md`)、例 (`references/examples/`) |
 | `trial/` | できたスキルを、新しい設計書 (`03-shipping.md`) に使った結果 (`03-shipping-review.md`) |
 
